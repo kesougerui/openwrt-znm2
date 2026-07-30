@@ -60,6 +60,9 @@ sed -i "s/^CONFIG_VERSION_CODE=.*/CONFIG_VERSION_CODE=\"R$(date +%Y%m%d)\"/" .co
 # 科学上网插件 - OpenClash
 git clone --depth 1 https://github.com/vernesong/OpenClash package/luci-app-openclash
 
+# 移除不存在的 feeds，避免 apk update 报错
+sed -i '/nss_packages\|sqm_scripts_nss\|video/d' feeds.conf.default
+
 # 再次更新feeds
 ./scripts/feeds update -a
 ./scripts/feeds install -a
