@@ -50,6 +50,27 @@ if ! command -v pahole >/dev/null 2>&1 || ! command -v clang >/dev/null 2>&1; th
     fi
 fi
 
+# ---------- 0.6 临时/缓存改道到构建盘 ----------
+# maximize-build-space 后根分区只剩 ~100MB；GOCACHE/TMPDIR/npm 缓存默认落根分区，
+# BTF(pahole) 临时文件和 daed 的 Go 构建会直接把根分区写爆（run#8/#9 死因）。
+# GITHUB_ENV 写入对后续步骤（Download DL / Compile Firmware）生效；本地跑无此变量自动跳过。
+if [ -n "$GITHUB_ENV" ] && [ -n "$GITHUB_WORKSPACE" ]; then
+    CACHE_DIR="$GITHUB_WORKSPACE/.ci-cache"
+    mkdir -p "$CACHE_DIR/tmp" "$CACHE_DIR/go-tmp"
+    {
+        echo "TMPDIR=$CACHE_DIR/tmp"
+        echo "TMP=$CACHE_DIR/tmp"
+        echo "TEMP=$CACHE_DIR/tmp"
+        echo "GOCACHE=$CACHE_DIR/go-build"
+        echo "GOMODCACHE=$CACHE_DIR/go-mod"
+        echo "GOTMPDIR=$CACHE_DIR/go-tmp"
+        echo "npm_config_cache=$CACHE_DIR/npm"
+        echo "XDG_CACHE_HOME=$CACHE_DIR/xdg"
+        echo "CCACHE_DIR=$CACHE_DIR/ccache"
+    } >> "$GITHUB_ENV"
+    echo ">> [0.6] 临时/缓存目录改道 $CACHE_DIR"
+fi
+
 # ---------- 1. 自定义版本信息 + 网络诊断地址 ----------
 # 原理：99-default-settings 是 uci-defaults 脚本，首次开机执行一次后自删。
 # 注入内容：改写 /etc/openwrt_release 的版本字段 + 设置 LuCI 诊断地址。

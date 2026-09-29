@@ -40,6 +40,7 @@ bash diy_script.sh
 ```text
 [0/8]   前置检查（防呆）
 [0.5]   腾磁盘（清 runner 预装工具链 20-30GB）+ 补装 clang/pahole/dwarves
+[0.6]   临时/缓存改道到构建盘（TMPDIR/GOCACHE/npm/XDG → $GITHUB_WORKSPACE/.ci-cache，经 GITHUB_ENV 生效；根分区只剩 ~100MB）
 [1/8]   自定义版本信息 + 网络诊断地址
 [2/8]   最大连接数 65535（幂等）
 [3/8]   golang 换 sbwml 版（先验证分支，失败回退上游）
@@ -108,7 +109,7 @@ bash diy_script.sh
 | 接入 daed | clone QiuSimons/luci-app-daed@kix + 3 条 DaeWRT 实测编译补丁（pnpm/quic/init） |
 | eBPF/BTF 内核 | `.config` 11 行 + 脚本注入原始内核 BTF 配置（CO-RE 链路必需） |
 | UPnP | luci-app-upnp + miniupnpd-nftables（原 =n 打开） |
-| CI 健壮性 | 0.5 步清 runner 磁盘（run #8 死于 No space left on device）+ 补装 dwarves/clang（原依赖 URL 已 404）；feed 自带 luci-app-daed/daed 冲突清除 |
+| CI 健壮性 | 0.5 步清 runner 磁盘 + **0.6 步临时/缓存改道构建盘**（run #8/#9 死于 No space left on device：根分区被 maximize-build-space 挤到只剩 100MB，BTF pahole/daed Go 缓存全写根分区）+ 补装 dwarves/clang（原依赖 URL 已 404）；feed 自带 luci-app-daed/daed 冲突清除 |
 | OxiDNS | ~~打包进镜像~~ 不装（由用户自行按现役方式安装） |
 
 ---
