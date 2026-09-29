@@ -1,6 +1,6 @@
 #!/bin/bash
 # =============================================================================
-# diy_script.sh — OpenWrt 固件定制脚本（ZN-M2 · IPQ6000 · nowifi · NSS · daed+OxiDNS）
+# diy_script.sh — OpenWrt 固件定制脚本
 #
 # 适用源码树：LiBwrt/openwrt-6.x @ 25.12-nss（LibWrt 6.12 内核 + NSS 分支）
 # 运行位置：必须在 openwrt 源码根目录（.github/workflows 中由 Actions 调用，
@@ -110,7 +110,7 @@ echo ">> [5/8] 写入 .config 版本号：$BUILD_DATE"
 set_version CONFIG_VERSION_NUMBER "$BUILD_DATE"
 set_version CONFIG_VERSION_CODE  "R$(date +%Y%m%d)"
 
-# ---------- 6. daed + OxiDNS + eBPF 内核配置 ----------
+# ---------- 6. daed + eBPF 内核配置 ----------
 # 6a. daed（luci-app-daed，含 daed 后端；已存在则更新，保证可重复执行）
 if [ -d package/luci-app-daed ]; then
     echo ">> [6/8] luci-app-daed 已存在，git pull 更新"
@@ -124,13 +124,6 @@ fi
 sed -i 's/pnpm install ; \\/pnpm install --no-frozen-lockfile ; \\/g' package/luci-app-daed/daed/Makefile
 sed -i 's|github.com/daeuniverse/quic-go|github.com/olicesx/quic-go|g' package/luci-app-daed/daed/Makefile
 sed -i 's|/run/i\\  procd_set_param|/procd_set_param command/i \\\tprocd_set_param|g' package/luci-app-daed/luci-app-daed/root/etc/init.d/luci_daed
-
-# 6b. OxiDNS 打包（仓库自带 package/oxidns -> 源码树）
-SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-[ -d "$SCRIPT_DIR/package/oxidns" ] || { echo "!! 错误：缺少 $SCRIPT_DIR/package/oxidns"; exit 1; }
-rm -rf package/oxidns
-cp -r "$SCRIPT_DIR/package/oxidns" package/oxidns
-echo ">> [6/8] oxidns 包已拷入 package/oxidns"
 
 # 6c. eBPF/BTF 内核配置注入（generic 默认关闭 BTF，daed CO-RE 需要 /sys/kernel/btf/vmlinux）
 for KF in target/linux/qualcommax/ipq60xx/config-default target/linux/qualcommax/config-6.12; do
@@ -168,7 +161,7 @@ done
 echo ">> [7/8] 清理 feeds.conf.default（nss_packages/sqm_scripts_nss/video）"
 sed -i '/^src-git \(nss_packages\|sqm_scripts_nss\|video\)\b/d' feeds.conf.default
 
-# ---------- 8. 重新拉取并安装 feeds（golang 替换、daed/oxidns 落地均在此前完成） ----------
+# ---------- 8. 重新拉取并安装 feeds（golang 替换、daed 落地均在此前完成） ----------
 echo ">> [8/8] feeds update -a（网络较慢时请耐心等待）"
 ./scripts/feeds update -a || { echo "!! feeds update 失败，请检查网络后重试"; exit 1; }
 echo ">> [8/8] feeds install -a"
