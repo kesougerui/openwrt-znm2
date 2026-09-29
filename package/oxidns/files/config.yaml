@@ -1,0 +1,333 @@
+api:
+  http:
+    listen: 0.0.0.0:9199
+    webui:
+      root: /usr/share/oxidns/webui
+      index: index.html
+log:
+  level: error
+  file: ./oxidns.log
+  rotation:
+    type: daily
+    max_files: 7
+network:
+  outbound:
+    default: direct
+    profiles:
+      direct:
+        resolver:
+          nameservers:
+            - addr: 223.5.5.5:53
+          ip_version: 4
+      proxy:
+        proxy:
+          socks5: 127.0.0.1:7891
+plugins:
+  - tag: subscription_cron
+    type: cron
+    args:
+      timezone: Asia/Shanghai
+      jobs:
+        - name: refresh_rule_subscriptions
+          interval: 24h
+          executors:
+            - $subscription_refresh
+  - tag: subscription_refresh
+    type: sequence
+    args:
+      - exec: $subscription_download
+      - exec: $reload_rule_providers
+  - tag: subscription_download
+    type: download
+    args:
+      timeout: 30s
+      startup_if_missing: true
+      downloads:
+        - url: https://anti-ad.net/adguard.txt
+          dir: ./rules
+          filename: adguard.txt
+        - url: https://cdn.jsdelivr.net/gh/DustinWin/ruleset_geodata@mihomo-geodata/geosite-lite.dat
+          dir: ./rules
+          filename: geosite.dat
+        - url: https://cdn.jsdelivr.net/gh/Loyalsoldier/geoip@release/geoip-only-cn-private.dat
+          dir: ./rules
+          filename: geoip.dat
+        - url: https://raw.githubusercontent.com/ForestL18/rules-dat/refs/heads/mihomo/asn/combined/China-ASN-combined.list
+          dir: ./rules
+          filename: China-ASN.txt
+  - tag: reload_rule_providers
+    type: reload_provider
+    args:
+      - $geosite_cn
+      - $geosite_gfw
+      - $ad_rules
+      - $china_asn
+  - tag: ad_rules
+    type: adguard_rule
+    args:
+      files:
+        - ./rules/adguard.txt
+  - tag: china_asn
+    type: ip_set
+    args:
+      files:
+        - ./rules/China-ASN.txt
+  - tag: leaktest_domains
+    type: domain_set
+    args:
+      exps:
+        - domain:dahhxxttxs.com
+        - domain:qrstuvwxyzab.com
+        - domain:ipleak.net
+        - domain:browserleaks.net
+        - domain:browserleaks.org
+        - domain:surfsharkdns.com
+        - domain:edns.ip-api.com
+        - domain:dnsleaktest.com
+        - domain:whoer.net
+        - domain:bash.ws
+        - domain:dnscheck.tools
+  - tag: geosite_cn
+    type: geosite
+    args:
+      file: ./rules/geosite.dat
+      selectors:
+        - cn
+  - tag: geosite_gfw
+    type: geosite
+    args:
+      file: ./rules/geosite.dat
+      selectors:
+        - gfw
+  - tag: local_ptr
+    type: domain_set
+    args:
+      exps:
+        - 168.192.in-addr.arpa.
+        - 16.172.in-addr.arpa.
+        - 10.in-addr.arpa.
+  - tag: ip_select
+    type: ip_selector
+    args:
+      selection_mode: background
+      probe_methods:
+        - tcp:443
+      probe_stagger: 200
+      probe_timeout: 1000
+      max_wait: 2000
+      top_n: 2
+      max_parallel_probes: 256
+      cache:
+        enabled: true
+        size: 4096
+        ttl: 3600
+        failure_ttl: 60
+  - tag: cache_local
+    type: cache
+    args:
+      size: 8192
+      lazy_cache_ttl: 86400
+      short_circuit: false
+      cache_negative: true
+      max_negative_ttl: 300
+      negative_ttl_without_soa: 60
+      max_positive_ttl: 3600
+      ecs_in_key: false
+  - tag: learned_proxy
+    type: dynamic_domain_set
+    args:
+      path: ./rules/learned_proxy.txt
+  - tag: learned_direct
+    type: dynamic_domain_set
+    args:
+      path: ./rules/learned_direct.txt
+  - tag: local_domains
+    type: domain_set
+    args:
+      exps:
+        - domain:.lan
+        - domain:.local
+        - domain:.home
+        - domain:.internal
+        - domain:.fritz
+        - domain:.gateway
+  - tag: learn_proxy
+    type: learn_domain
+    args:
+      provider: learned_proxy
+      phase: before
+      questions: first
+      qtypes:
+        - A
+      success_only: true
+      answer_required: true
+      rule_kind: full
+      async: true
+      error_mode: continue
+  - tag: learn_direct
+    type: learn_domain
+    args:
+      provider: learned_direct
+      phase: after
+      questions: first
+      qtypes:
+        - A
+      success_only: true
+      answer_required: true
+      rule_kind: full
+      async: true
+      error_mode: continue
+  - tag: block_seq
+    type: sequence
+    args:
+      - matches: qname cloudflare-ech.com
+        exec: $forward_local
+      - matches: has_resp
+        exec: accept
+      - matches: qtype 65,255
+        exec: reject 0
+      - matches: question $ad_rules
+        exec: $ad_blackhole
+      - matches: qname $local_ptr
+        exec: reject 3
+  - tag: ad_blackhole
+    type: black_hole
+    args:
+      ips:
+        - 0.0.0.0
+        - "::"
+      short_circuit: true
+  - tag: forward_local
+    type: forward
+    args:
+      concurrent: 3
+      response_selection: balanced
+      upstreams:
+        - tag: alidns
+          addr: 223.5.5.5
+          insecure_skip_verify: false
+        - tag: cmcc1
+          addr: 183.221.253.100
+          insecure_skip_verify: false
+        - tag: cmcc2
+          addr: 211.137.96.205
+          insecure_skip_verify: false
+      short_circuit: false
+  - tag: mihomo
+    type: forward
+    args:
+      concurrent: 1
+      response_selection: balanced
+      upstreams:
+        - tag: openclash
+          addr: 127.0.0.1:7874
+          insecure_skip_verify: false
+          enable_pipeline: false
+      short_circuit: false
+  - tag: forward_remote
+    type: forward
+    args:
+      concurrent: 2
+      response_selection: balanced
+      upstreams:
+        - addr: tls://1.1.1.1:853
+          insecure_skip_verify: false
+          enable_pipeline: true
+        - addr: https://dns.flymc.cc/dns-query
+          bootstrap: 223.5.5.5:53
+          insecure_skip_verify: false
+          enable_pipeline: true
+      short_circuit: false
+  - tag: fallback
+    type: fallback
+    args:
+      primary: mihomo
+      secondary: forward_remote
+      threshold: 2000
+      always_standby: false
+      short_circuit: true
+  - tag: local_seq
+    type: sequence
+    args:
+      - exec: $cache_local
+      - matches: has_resp
+        exec: accept
+      - exec: $forward_local
+      - exec: $ip_select
+      - exec: accept
+  - tag: remote_seq
+    type: sequence
+    args:
+      - matches: has_resp
+        exec: accept
+      - exec: $fallback
+      - matches: has_resp
+        exec: accept
+      - exec: accept
+  - tag: unknown_seq
+    type: sequence
+    args:
+      - matches: "!qtype A AAAA"
+        exec: goto remote_seq
+      - matches: question $local_domains
+        exec: reject 3
+      - exec: $forward_local
+      - matches: "!has_wanted_ans"
+        exec: goto unknown_remote_seq
+      - matches: resp_ip $china_asn
+        exec: $learn_direct
+      - matches: resp_ip $china_asn
+        exec: accept
+      - exec: $learn_proxy
+      - exec: goto unknown_remote_seq
+  - tag: unknown_remote_seq
+    type: sequence
+    args:
+      - exec: drop_resp
+      - exec: $fallback
+      - matches: has_wanted_ans
+        exec: accept
+      - matches: rcode 0 3
+        exec: accept
+      - exec: reject 2
+  - tag: main_sequence
+    type: sequence
+    args:
+      - exec: $query_recorder
+      - exec: jump block_seq
+      - matches: has_resp
+        exec: accept
+      - matches: question $local_domains
+        exec: reject 3
+      - matches: qname $leaktest_domains
+        exec: goto remote_seq
+      - matches: qname $learned_proxy
+        exec: goto remote_seq
+      - matches: qname $learned_direct
+        exec: goto local_seq
+      - matches: qname $geosite_cn
+        exec: goto local_seq
+      - matches: qname $geosite_gfw
+        exec: goto remote_seq
+      - exec: goto unknown_seq
+  - tag: query_recorder
+    type: query_recorder
+    args:
+      path: /tmp/query-recorder.sqlite
+      queue_size: 8192
+      batch_size: 256
+      flush_interval_ms: 200
+      memory_tail: 1024
+      retention_days: 1
+      cleanup_interval_hours: 1
+      reader_concurrency: 2
+  - tag: udp_server
+    type: udp_server
+    args:
+      entry: main_sequence
+      listen: :53
+  - tag: tcp_server
+    type: tcp_server
+    args:
+      entry: main_sequence
+      listen: :53
