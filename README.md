@@ -12,7 +12,7 @@
 | `ipq60xx-6.12-nowifi.config` | 固件构建配置：daed(eBPF) + UPnP，无 OpenClash / 无 OxiDNS |
 | `diy_script.sh` | 编译前定制脚本：版本号、默认 IP、golang、daed clone+补丁、eBPF/BTF 内核注入、feeds 清理 |
 | `.github/workflows/IPQ60XX-6.12-NOWIFI.yml` | GitHub Actions 工作流（编译 + Release + 钩子脚本） |
-| `BUILD.md` | 本文 |
+| `README.md` | 本文（仓库首页说明） |
 
 ---
 
