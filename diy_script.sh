@@ -16,13 +16,11 @@
 #     会显示字面量 "v$(date +%Y.%m.%d)"；现改为编译期展开后写死，简单可靠。
 #   * 全程幂等：重复执行不会重复插入/重复 clone。
 #   * 失败保护：set -e + 前置检查 + 关键步骤显式报错。
-#   * golang 分支先验证再替换，分支不存在时回退上游，不硬失败。
 # =============================================================================
 set -e    # 任一命令失败立即退出，避免带着残缺状态继续编译
 
 # ---------- 可调参数 ----------
 DEFAULT_IP="${DEFAULT_IP:-192.168.2.1}"       # 默认 LAN IP
-GOLANG_BRANCH="${GOLANG_BRANCH:-26.x}"        # sbwml golang 分支
 BUILD_DATE="$(date +%Y.%m.%d)"                # 编译日期（版本号用，编译期固定）
 
 # ---------- 0. 前置检查（防呆） ----------
@@ -30,8 +28,8 @@ BUILD_DATE="$(date +%Y.%m.%d)"                # 编译日期（版本号用，�
 [ -f .config ]        || { echo "!! 错误：缺少 .config，请先执行：cp ipq60xx-6.12-nowifi.config .config"; exit 1; }
 echo ">> [0/8] 前置检查通过（源码目录 OK，.config OK）"
 
-# ---------- 0.5 补装 host 工具 + 腾磁盘（daed eBPF 字节码编译用 clang；内核 BTF 用 pahole/dwarves） ----------
-# GitHub runner 预装工具链占 20~30GB，BTF 内核(vmlinux debug) + daed 前端会把它撑爆
+# ---------- 0.5 补装 host 工具 + 腾磁盘（内核 BTF 用 pahole/dwarves） ----------
+# GitHub runner 预装工具链占 20~30GB，BTF 内核(vmlinux debug)会把它撑爆
 # （run #8 死于 No space left on device）。只在 runner 上存在这些目录，本地编译自动跳过。
 if [ -d /opt/hostedtoolcache ] || [ -d /usr/local/lib/android ]; then
     echo ">> [0.5] 清理 runner 预装工具链释放磁盘"
@@ -39,20 +37,20 @@ if [ -d /opt/hostedtoolcache ] || [ -d /usr/local/lib/android ]; then
         /usr/local/.ghcup /opt/ghc /usr/local/share/powershell /usr/local/lib/node_modules 2>/dev/null || true
     df -h / | tail -1
 fi
-if ! command -v pahole >/dev/null 2>&1 || ! command -v clang >/dev/null 2>&1; then
+if ! command -v pahole >/dev/null 2>&1; then
     if command -v apt-get >/dev/null 2>&1; then
-        echo ">> [0.5] 安装 dwarves + clang（BTF/eBPF 构建依赖）"
+        echo ">> [0.5] 安装 dwarves（BTF 构建依赖）"
         sudo apt-get update -qq >/dev/null 2>&1 || true
-        sudo apt-get install -y -qq dwarves clang >/dev/null 2>&1 \
-            || echo ">> 警告：dwarves/clang 安装失败（构建机已有则可忽略）"
+        sudo apt-get install -y -qq dwarves >/dev/null 2>&1 \
+            || echo ">> 警告：dwarves 安装失败（构建机已有则可忽略）"
     else
-        echo ">> 警告：无 apt-get，请自行确认 pahole 与 clang 已安装"
+        echo ">> 警告：无 apt-get，请自行确认 pahole 已安装"
     fi
 fi
 
 # ---------- 0.6 临时/缓存改道到构建盘 ----------
 # maximize-build-space 后根分区只剩 ~100MB；GOCACHE/TMPDIR/npm 缓存默认落根分区，
-# BTF(pahole) 临时文件和 daed 的 Go 构建会直接把根分区写爆（run#8/#9 死因）。
+# BTF(pahole) 临时文件会直接把根分区写爆（run#8/#9 死因）。
 # GITHUB_ENV 写入对后续步骤（Download DL / Compile Firmware）生效；本地跑无此变量自动跳过。
 if [ -n "$GITHUB_ENV" ] && [ -n "$GITHUB_WORKSPACE" ]; then
     CACHE_DIR="$GITHUB_WORKSPACE/.ci-cache"
@@ -106,18 +104,6 @@ else
     echo ">> [2/8] 跳过：nf_conntrack_max 已存在或文件缺失"
 fi
 
-# ---------- 3. golang 换 sbwml 版（先验证分支，失败回退上游） ----------
-# 说明：daed 是 Go 源码编译，需要较新的 Go 工具链。先 ls-remote 确认远程分支存在再替换；
-#       分支不存在时保留上游 golang（仍可编译，只是版本旧），不中断构建。
-if git ls-remote --heads https://github.com/sbwml/packages_lang_golang "$GOLANG_BRANCH" >/dev/null 2>&1; then
-    echo ">> [3/8] 更换 golang -> sbwml 分支 $GOLANG_BRANCH"
-    rm -rf feeds/packages/lang/golang
-    git clone --depth 1 -b "$GOLANG_BRANCH" \
-        https://github.com/sbwml/packages_lang_golang feeds/packages/lang/golang
-else
-    echo ">> [3/8] 警告：sbwml golang 分支 [$GOLANG_BRANCH] 不存在，保留上游 golang（可用 GOLANG_BRANCH 覆盖）"
-fi
-
 # ---------- 4. 默认 LAN IP ----------
 CFG_GEN="package/base-files/files/bin/config_generate"
 if [ -f "$CFG_GEN" ]; then
@@ -139,29 +125,15 @@ echo ">> [5/8] 写入 .config 版本号：$BUILD_DATE"
 set_version CONFIG_VERSION_NUMBER "$BUILD_DATE"
 set_version CONFIG_VERSION_CODE  "R$(date +%Y%m%d)"
 
-# ---------- 6. daed + eBPF 内核配置 ----------
-# 6a. daed（luci-app-daed，含 daed 后端；已存在则更新，保证可重复执行）
-if [ -d package/luci-app-daed ]; then
-    echo ">> [6/8] luci-app-daed 已存在，git pull 更新"
-    git -C package/luci-app-daed pull --ff-only \
-        || echo ">> [6/8] luci-app-daed 更新失败（忽略，使用现有版本）"
-else
-    echo ">> [6/8] clone luci-app-daed (kix) -> package/luci-app-daed"
-    git clone --depth 1 -b kix https://github.com/QiuSimons/luci-app-daed package/luci-app-daed
-fi
-# 编译修补（源自 DaeWRT-CI 实测补丁：pnpm / quic-go 换源 / init 顺序）
-sed -i 's/pnpm install ; \\/pnpm install --no-frozen-lockfile ; \\/g' package/luci-app-daed/daed/Makefile
-sed -i 's|github.com/daeuniverse/quic-go|github.com/olicesx/quic-go|g' package/luci-app-daed/daed/Makefile
-sed -i 's|/run/i\\  procd_set_param|/procd_set_param command/i \\\tprocd_set_param|g' package/luci-app-daed/luci-app-daed/root/etc/init.d/luci_daed
-
-# 6c. eBPF/BTF 内核配置注入（generic 默认关闭 BTF，daed CO-RE 需要 /sys/kernel/btf/vmlinux）
+# ---------- 6. eBPF/BTF 内核配置注入 ----------
+# 说明：generic 默认关闭 BTF；保留注入，以后装 daed 等 eBPF 插件可直接用
 for KF in target/linux/qualcommax/ipq60xx/config-default target/linux/qualcommax/config-6.12; do
     [ -f "$KF" ] || continue
     if grep -q 'CONFIG_DEBUG_INFO_BTF=y' "$KF"; then
         echo ">> [6/8] $KF 已含 BTF 配置，跳过"
     else
         cat >> "$KF" <<'KEOF'
-# ==== eBPF/BTF (daed) injected by diy_script.sh ====
+# ==== eBPF/BTF injected by diy_script.sh ====
 CONFIG_BPF=y
 CONFIG_BPF_SYSCALL=y
 CONFIG_BPF_JIT=y
@@ -190,16 +162,11 @@ done
 echo ">> [7/8] 清理 feeds.conf.default（nss_packages/sqm_scripts_nss/video）"
 sed -i '/^src-git \(nss_packages\|sqm_scripts_nss\|video\)\b/d' feeds.conf.default
 
-# ---------- 8. 重新拉取并安装 feeds（golang 替换、daed 落地均在此前完成） ----------
+# ---------- 8. 重新拉取并安装 feeds ----------
 echo ">> [8/8] feeds update -a（网络较慢时请耐心等待）"
 ./scripts/feeds update -a || { echo "!! feeds update 失败，请检查网络后重试"; exit 1; }
 echo ">> [8/8] feeds install -a"
 ./scripts/feeds install -a || { echo "!! feeds install 失败"; exit 1; }
-# feeds 自带 luci-app-daed/dae/daed 与本地克隆的 package/luci-app-daed 冲突（重复包），
-# feeds install -a 之后再清（防 make defconfig 报 duplicate）
-rm -rf feeds/luci/applications/luci-app-dae* package/feeds/luci/luci-app-dae* \
-       feeds/packages/net/daed package/feeds/packages/daed
-echo ">> [8/8] 已清除 feeds 内置 daed/dae，使用本地 package/luci-app-daed"
 
 # ---------- 完成提示 ----------
 cat <<EOF
