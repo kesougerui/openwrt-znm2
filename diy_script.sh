@@ -30,7 +30,15 @@ BUILD_DATE="$(date +%Y.%m.%d)"                # 编译日期（版本号用，�
 [ -f .config ]        || { echo "!! 错误：缺少 .config，请先执行：cp ipq60xx-6.12-nowifi.config .config"; exit 1; }
 echo ">> [0/8] 前置检查通过（源码目录 OK，.config OK）"
 
-# ---------- 0.5 补装 host 工具（daed eBPF 字节码编译用 clang；内核 BTF 用 pahole/dwarves） ----------
+# ---------- 0.5 补装 host 工具 + 腾磁盘（daed eBPF 字节码编译用 clang；内核 BTF 用 pahole/dwarves） ----------
+# GitHub runner 预装工具链占 20~30GB，BTF 内核(vmlinux debug) + daed 前端会把它撑爆
+# （run #8 死于 No space left on device）。只在 runner 上存在这些目录，本地编译自动跳过。
+if [ -d /opt/hostedtoolcache ] || [ -d /usr/local/lib/android ]; then
+    echo ">> [0.5] 清理 runner 预装工具链释放磁盘"
+    sudo rm -rf /opt/hostedtoolcache/* /usr/local/lib/android /usr/share/dotnet \
+        /usr/local/.ghcup /opt/ghc /usr/local/share/powershell /usr/local/lib/node_modules 2>/dev/null || true
+    df -h / | tail -1
+fi
 if ! command -v pahole >/dev/null 2>&1 || ! command -v clang >/dev/null 2>&1; then
     if command -v apt-get >/dev/null 2>&1; then
         echo ">> [0.5] 安装 dwarves + clang（BTF/eBPF 构建依赖）"
